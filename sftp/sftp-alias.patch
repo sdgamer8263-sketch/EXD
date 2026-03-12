@@ -1,0 +1,202 @@
+diff --git a/app/Console/Commands/Node/MakeNodeCommand.php b/app/Console/Commands/Node/MakeNodeCommand.php
+index 2d2623a..2f8edae 100644
+--- a/app/Console/Commands/Node/MakeNodeCommand.php
++++ b/app/Console/Commands/Node/MakeNodeCommand.php
+@@ -12,6 +12,7 @@ class MakeNodeCommand extends Command
+                             {--description= : A description to identify the node.}
+                             {--locationId= : A valid locationId.}
+                             {--fqdn= : The domain name (e.g node.example.com) to be used for connecting to the daemon. An IP address may only be used if you are not using SSL for this node.}
++                            {--sftpAlias= : The SFTP hostname alias (e.g sftp.example.com) to be used for connecting to the SFTP server. An IP address may only be used if you are not using SSL for this node.}
+                             {--public= : Should the node be public or private? (public=1 / private=0).}
+                             {--scheme= : Which scheme should be used? (Enable SSL=https / Disable SSL=http).}
+                             {--proxy= : Is the daemon behind a proxy? (Yes=1 / No=0).}
+@@ -62,6 +63,7 @@ class MakeNodeCommand extends Command
+         $data['daemonListen'] = $this->option('daemonListeningPort') ?? $this->ask('Enter the wings listening port', '8080');
+         $data['daemonSFTP'] = $this->option('daemonSFTPPort') ?? $this->ask('Enter the wings SFTP listening port', '2022');
+         $data['daemonBase'] = $this->option('daemonBase') ?? $this->ask('Enter the base folder', '/var/lib/pterodactyl/volumes');
++        $data['sftp_alias'] = $this->option('sftpAlias') ?? $this->ask('Enter the SFTP hostname alias (e.g sftp.example.com) to be used for connecting to the SFTP server. An IP address may only be used if you are not using SSL for this node');
+ 
+         $node = $this->creationService->handle($data);
+         $this->line('Successfully created a new node on the location ' . $data['location_id'] . ' with the name ' . $data['name'] . ' and has an id of ' . $node->id . '.');
+diff --git a/app/Http/Controllers/Admin/Nodes/NodeViewController.php b/app/Http/Controllers/Admin/Nodes/NodeViewController.php
+index ed8cd20..dc269d3 100644
+--- a/app/Http/Controllers/Admin/Nodes/NodeViewController.php
++++ b/app/Http/Controllers/Admin/Nodes/NodeViewController.php
+@@ -91,7 +91,7 @@ class NodeViewController extends Controller
+     {
+         $this->plainInject([
+             'node' => Collection::wrap($node->makeVisible(['daemon_token_id', 'daemon_token']))
+-                ->only(['scheme', 'fqdn', 'daemonListen', 'daemon_token_id', 'daemon_token']),
++                ->only(['scheme', 'fqdn', 'daemonListen', 'daemon_token_id', 'daemon_token', 'sftp_alias']),
+         ]);
+ 
+         return $this->view->make('admin.nodes.view.servers', [
+diff --git a/app/Http/Controllers/Api/Application/Nodes/NodeController.php b/app/Http/Controllers/Api/Application/Nodes/NodeController.php
+index 5c40f77..ddce6e0 100644
+--- a/app/Http/Controllers/Api/Application/Nodes/NodeController.php
++++ b/app/Http/Controllers/Api/Application/Nodes/NodeController.php
+@@ -36,7 +36,7 @@ class NodeController extends ApplicationApiController
+     {
+         $nodes = QueryBuilder::for(Node::query())
+             ->allowedFilters(['uuid', 'name', 'fqdn', 'daemon_token_id'])
+-            ->allowedSorts(['id', 'uuid', 'memory', 'disk'])
++            ->allowedSorts(['id', 'uuid', 'memory', 'disk', 'sftp_alias'])
+             ->paginate($request->query('per_page') ?? 50);
+ 
+         return $this->fractal->collection($nodes)
+diff --git a/app/Http/Requests/Admin/Node/NodeFormRequest.php b/app/Http/Requests/Admin/Node/NodeFormRequest.php
+index f95189f..6514860 100644
+--- a/app/Http/Requests/Admin/Node/NodeFormRequest.php
++++ b/app/Http/Requests/Admin/Node/NodeFormRequest.php
+@@ -19,6 +19,7 @@ class NodeFormRequest extends AdminFormRequest
+ 
+         $data = Node::getRules();
+         $data['fqdn'][] = Fqdn::make('scheme');
++        $data['sftp_alias'][] = Fqdn::make('scheme');
+ 
+         return $data;
+     }
+diff --git a/app/Http/Requests/Api/Application/Nodes/StoreNodeRequest.php b/app/Http/Requests/Api/Application/Nodes/StoreNodeRequest.php
+index e80fdd4..c4b3eeb 100644
+--- a/app/Http/Requests/Api/Application/Nodes/StoreNodeRequest.php
++++ b/app/Http/Requests/Api/Application/Nodes/StoreNodeRequest.php
+@@ -33,6 +33,7 @@ class StoreNodeRequest extends ApplicationApiRequest
+             'daemonListen',
+             'daemonSFTP',
+             'daemonBase',
++            'sftp_alias',
+         ])->mapWithKeys(function ($value, $key) {
+             $key = ($key === 'daemonSFTP') ? 'daemonSftp' : $key;
+ 
+diff --git a/app/Models/Node.php b/app/Models/Node.php
+index fdb1a43..7c9b392 100644
+--- a/app/Models/Node.php
++++ b/app/Models/Node.php
+@@ -20,6 +20,7 @@ use Illuminate\Database\Eloquent\Relations\HasManyThrough;
+  * @property string|null $description
+  * @property int $location_id
+  * @property string $fqdn
++ * @property string $sftp_alias
+  * @property string $scheme
+  * @property bool $behind_proxy
+  * @property bool $maintenance_mode
+@@ -89,6 +90,7 @@ class Node extends Model
+         'disk_overallocate', 'upload_size', 'daemonBase',
+         'daemonSFTP', 'daemonListen',
+         'description', 'maintenance_mode',
++        'sftp_alias',
+     ];
+ 
+     public static array $validationRules = [
+@@ -108,6 +110,7 @@ class Node extends Model
+         'daemonListen' => 'required|numeric|between:1,65535',
+         'maintenance_mode' => 'boolean',
+         'upload_size' => 'int|between:1,1024',
++        'sftp_alias' => 'string|nullable',
+     ];
+ 
+     /**
+diff --git a/app/Repositories/Eloquent/NodeRepository.php b/app/Repositories/Eloquent/NodeRepository.php
+index fe019e5..ecf8dea 100644
+--- a/app/Repositories/Eloquent/NodeRepository.php
++++ b/app/Repositories/Eloquent/NodeRepository.php
+@@ -142,7 +142,7 @@ class NodeRepository extends EloquentRepository implements NodeRepositoryInterfa
+     public function getNodeWithResourceUsage(int $node_id): Node
+     {
+         $instance = $this->getBuilder()
+-            ->select(['nodes.id', 'nodes.fqdn', 'nodes.scheme', 'nodes.daemon_token', 'nodes.daemonListen', 'nodes.memory', 'nodes.disk', 'nodes.memory_overallocate', 'nodes.disk_overallocate'])
++            ->select(['nodes.id', 'nodes.fqdn', 'nodes.scheme', 'nodes.daemon_token', 'nodes.daemonListen', 'nodes.memory', 'nodes.disk', 'nodes.memory_overallocate', 'nodes.disk_overallocate', 'nodes.sftp_alias'])
+             ->selectRaw('IFNULL(SUM(servers.memory), 0) as sum_memory, IFNULL(SUM(servers.disk), 0) as sum_disk')
+             ->leftJoin('servers', 'servers.node_id', '=', 'nodes.id')
+             ->where('nodes.id', $node_id);
+diff --git a/app/Services/Nodes/NodeUpdateService.php b/app/Services/Nodes/NodeUpdateService.php
+index 11078af..33bcf26 100644
+--- a/app/Services/Nodes/NodeUpdateService.php
++++ b/app/Services/Nodes/NodeUpdateService.php
+@@ -52,6 +52,7 @@ class NodeUpdateService
+                 //
+                 // @see https://github.com/pterodactyl/panel/issues/1931
+                 $node->fqdn = $updated->fqdn;
++                $node->sftp_alias = $updated->sftp_alias;
+ 
+                 $this->configurationRepository->setNode($node)->update($updated);
+             } catch (DaemonConnectionException $exception) {
+diff --git a/app/Transformers/Api/Client/ServerTransformer.php b/app/Transformers/Api/Client/ServerTransformer.php
+index abe0852..4f5c4c6 100644
+--- a/app/Transformers/Api/Client/ServerTransformer.php
++++ b/app/Transformers/Api/Client/ServerTransformer.php
+@@ -50,7 +50,7 @@ class ServerTransformer extends BaseClientTransformer
+             'nest_id' => $server->nest_id,
+             'egg_id' => $server->egg_id,
+             'sftp_details' => [
+-                'ip' => $server->node->fqdn,
++                'ip' => $server->node->sftp_alias ?? $server->node->fqdn,
+                 'port' => $server->node->daemonSFTP,
+             ],
+             'description' => $server->description,
+diff --git a/database/Factories/NodeFactory.php b/database/Factories/NodeFactory.php
+index 1dbd5d9..a1b5675 100644
+--- a/database/Factories/NodeFactory.php
++++ b/database/Factories/NodeFactory.php
+@@ -39,6 +39,7 @@ class NodeFactory extends Factory
+             'daemonListen' => 8080,
+             'daemonSFTP' => 2022,
+             'daemonBase' => '/var/lib/pterodactyl/volumes',
++            'sftp_alias' => $this->faker->unique()->ipv4,
+         ];
+     }
+ }
+diff --git a/database/migrations/2025_08_26_000001_add_sftp_alias_to_nodes_table.php b/database/migrations/2025_08_26_000001_add_sftp_alias_to_nodes_table.php
+new file mode 100644
+index 0000000..381e468
+--- /dev/null
++++ b/database/migrations/2025_08_26_000001_add_sftp_alias_to_nodes_table.php
+@@ -0,0 +1,28 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++return new class extends Migration
++{
++    /**
++     * Run the migrations.
++     */
++    public function up(): void
++    {
++        Schema::table('nodes', function (Blueprint $table) {
++            $table->string('sftp_alias')->nullable()->after('fqdn');
++        });
++    }
++
++    /**
++     * Reverse the migrations.
++     */
++    public function down(): void
++    {
++        Schema::table('nodes', function (Blueprint $table) {
++            $table->dropColumn('sftp_alias');
++        });
++    }
++};
+diff --git a/resources/views/admin/nodes/view/settings.blade.php b/resources/views/admin/nodes/view/settings.blade.php
+index 443e76b..9785f26 100644
+--- a/resources/views/admin/nodes/view/settings.blade.php
++++ b/resources/views/admin/nodes/view/settings.blade.php
+@@ -181,6 +181,15 @@
+                         </div>
+                         <p class="text-muted"><small>Enter the maximum size of files that can be uploaded through the web-based file manager.</small></p>
+                     </div>
++                    <div class="form-group col-xs-12">
++                        <label for="sftp_alias" class="control-label">SFTP Hostname Alias</label>
++                        <div>
++                            <input type="text" autocomplete="off" name="sftp_alias" class="form-control" value="{{ old('sftp_alias', $node->sftp_alias) }}" />
++                        </div>
++                        <p class="text-muted"><small>Please enter SFTP Hostname alias (e.g <code>sftp.example.com</code>) to be used for client connecting to SFTP. An IP address may only be used if you are not using SSL for this node.
++                                <a tabindex="0" data-toggle="popover" data-trigger="focus" title="Why do I need a FQDN?" data-content="In order to secure communications between your server and this node we use SSL. We cannot generate a SSL certificate for IP Addresses, and as such you will need to provide a FQDN.">Why?</a>
++                            </small></p>
++                    </div>
+                     <div class="col-xs-12">
+                         <div class="row">
+                             <div class="form-group col-md-6">
