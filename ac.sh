@@ -45,10 +45,25 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-if [ ! -f "artisan" ]; then
-    print_error "Please run this script from the root of your Pterodactyl installation (/var/www/pterodactyl)"
+# ==========================================
+# AUTO NAVIGATE TO PTERODACTYL DIRECTORY
+# ==========================================
+PTERO_DIR="/var/www/pterodactyl"
+print_message "Checking Pterodactyl directory..."
+
+if [ -d "$PTERO_DIR" ]; then
+    cd "$PTERO_DIR" || { print_error "Failed to enter $PTERO_DIR"; exit 1; }
+    print_message "Successfully moved to $PTERO_DIR"
+else
+    print_error "Pterodactyl installation not found at $PTERO_DIR. Please check your installation."
     exit 1
 fi
+
+if [ ! -f "artisan" ]; then
+    print_error "artisan file not found in $PTERO_DIR. Is Pterodactyl installed correctly?"
+    exit 1
+fi
+# ==========================================
 
 # Initial Checks
 print_warning "Auto Installer may not work if you are using a custom theme. Continue? (y/n): "
@@ -60,7 +75,7 @@ if [[ ! "$continue_install" =~ ^[Yy]$ ]]; then
 fi
 
 # ==========================================
-# FILE UPLOAD/DOWNLOAD SECTION (NO SFTP)
+# FILE DOWNLOAD SECTION
 # ==========================================
 print_message "Downloading required files from GitHub directly..."
 
