@@ -40,23 +40,6 @@ print_question() {
     echo -e "${BLUE}[SAGA]${NC} $1"
 }
 
-# Initial Checks
-print_warning "Auto Installer may not work if you are using a custom theme. Continue? (y/n): "
-read -r continue_install
-
-if [[ ! "$continue_install" =~ ^[Yy]$ ]]; then
-    print_message "Please do Manual Installation. Join: https://discord.gg/DU8cjUJjeN"
-    exit 0
-fi
-
-print_question "Have you uploaded the required files? (SuspendExpiredServers.php and migration) (y/n): "
-read -r files_uploaded
-
-if [[ ! "$files_uploaded" =~ ^[Yy]$ ]]; then
-    print_error "Please upload the required files before proceeding."
-    exit 1
-fi
-
 if [ "$EUID" -ne 0 ]; then
     print_error "Please run this script as root or with sudo"
     exit 1
@@ -66,6 +49,43 @@ if [ ! -f "artisan" ]; then
     print_error "Please run this script from the root of your Pterodactyl installation (/var/www/pterodactyl)"
     exit 1
 fi
+
+# Initial Checks
+print_warning "Auto Installer may not work if you are using a custom theme. Continue? (y/n): "
+read -r continue_install
+
+if [[ ! "$continue_install" =~ ^[Yy]$ ]]; then
+    print_message "Please do Manual Installation. Join: https://discord.gg/DU8cjUJjeN"
+    exit 0
+fi
+
+# ==========================================
+# FILE UPLOAD/DOWNLOAD SECTION (NO SFTP)
+# ==========================================
+print_message "Downloading required files from GitHub directly..."
+
+# Ensure target directories exist
+mkdir -p app/Console/Commands
+mkdir -p database/migrations
+
+# 1. Download SuspendExpiredServers.php
+wget -q -O app/Console/Commands/SuspendExpiredServers.php https://raw.githubusercontent.com/sdgamer8263-sketch/EXD/main/ac/SuspendExpiredServers.php
+if [ $? -eq 0 ]; then
+    print_message "Successfully downloaded SuspendExpiredServers.php"
+else
+    print_error "Failed to download SuspendExpiredServers.php"
+    exit 1
+fi
+
+# 2. Download Migration file
+wget -q -O database/migrations/2025_04_06_215345_add_expiration_date_to_servers_table.php https://raw.githubusercontent.com/sdgamer8263-sketch/EXD/main/ac/2025_04_06_215345_add_expiration_date_to_servers_table.php
+if [ $? -eq 0 ]; then
+    print_message "Successfully downloaded migration file"
+else
+    print_error "Failed to download migration file"
+    exit 1
+fi
+# ==========================================
 
 # Step 0: Backups
 print_message "Creating backups of files to be modified..."
